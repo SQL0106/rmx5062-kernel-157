@@ -11,23 +11,22 @@
 - 宿主查询一律 `rsh host-android '<cmd>'`。
 - 长任务：必须 `tee` 日志 + `if: always()` 上传、60 秒心跳、`timeout`、关键前置自检；**一个步骤 30–60 分钟无可观测进展即当失败处理**。
 
-## 当前状态（2026-11-07 16:35Z）
-最后 commit：`8d47ae8`（补 `block/blk-sec.h`）
-最后 run：`42390810756` → **编译全部通过，链接阶段失败**（8 分钟）
+## 当前状态（2026-11-07 16:50Z）
+最后 commit：`c62cab1`（bakasu 过滤 susfs 的 security/selinux hunk + 硬校验）
+最后 run：`42392288285` → 在跑
 
-### 阻塞点（当前唯一）
-```
-ld.lld: error: undefined symbol: fake_state
->>> referenced by selinuxfs.c:726 (../security/selinux/selinuxfs.c:726)
->>>               security/selinux/selinuxfs.o:(sel_write_context)
-...
-pahole: .tmp_vmlinux.btf: Invalid argument
-ld.lld: error: .btf.vmlinux.bin.o: unknown file type
-```
-- `fake_state` 在 157 官方树里**根本不存在**（本地全树 grep 无结果），说明是**某个补丁只应用了一半**：
-  使用它的 hunk 打上了，定义它的 hunk 没打上（我们所有外部补丁都是 `patch -F 3 ... || warning`，允许部分成功）。
-- 嫌疑顺序：`69_hide_stuff.patch`（cctv18 other_patch，selinux 相关）> susfs `50_add_susfs...` > CVE/rtmutex > BakaSU setup。
-- 下一步：确认 `fake_state` 的定义来自哪个补丁的哪个 hunk，判断是"补上定义"还是"撤掉使用的 hunk"；并把所有 `|| warning` 的补丁改成**应用后 grep 关键符号自检**。
+### 已解决的阻塞：`undefined symbol: fake_state`
+- `fake_state` / `fake_status` / `susfs_ksu_sid` / `susfs_priv_app_sid` 只由**原版 KernelSU** 的
+  `susfs4oki/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch` 定义（第 672 行；BakaSU 里 grep 为零）。
+- 我们只在 `ksu_type == ksu` 打该补丁；cctv18 的 134 workflow 也是同样条件，但他们的 BakaSU 当时自带定义，
+  而 2026-10 之后的 BakaSU 已改成 `backup_sepolicy` + hook/patch_memory（`kernel/feature/selinux_hide.c`），
+  `susfs_compat.mk` 会检测 hooks.c 里有无 `ksu_selinux_hide_running` 并自动回退，**不依赖源码改动**。
+- 修复：`scripts/filter_susfs_patch.py` 在 `ksu_type != ksu` 时剔除 `security/selinux/` 全部 hunk
+  （avc.c 的 log spoofing 也去掉，它同样引用 `susfs_ksu_sid`）；随后硬校验 `fs/susfs.c`、`fs/Makefile`、
+  `fs/proc/base.c` 已接入，且 `security/selinux` 不再出现 `fake_state/fake_status`。
+- 另修：157 树 `fs/proc/base.c` 在 `cpufreq_times.h` 后多了 `dma-buf.h`，susfs 的 include hunk 匹配不上，
+  改用 python 在 `#include <linux/dma-buf.h>` 后注入 `susfs_def.h`（否则 `SUSFS_IS_INODE_SUS_MAP` 未定义）。
+- 补丁一律改成 `patch --batch -r -`（丢弃 reject，避免等待交互），应用后立即断言关键文件。
 
 ## 已修复的问题（全部是"官方树残缺"或"脚本误删"，逐条记录，别重犯）
 
@@ -67,6 +66,7 @@ ld.lld: error: .btf.vmlinux.bin.o: unknown file type
 | 42389556644 | 9f9e7b1 | failure | 3.7m | `locking_main.h` |
 | 42390123132 | c5e6667 | failure | 3.5m | `blk-sec.h` |
 | 42390810756 | 8d47ae8 | failure | 8.4m | **链接 `fake_state`（编译已全过）** |
+| 42392288285 | c62cab1 | 进行中 | – | bakasu 过滤 security/selinux + base.c 注入 |
 
 浪费总计约 8 小时 02 分（482 分钟）；教训已写进 supermemory：
 - 项目级 error-solution `AbjG5ARgqNZj4BbCLBcaxh`

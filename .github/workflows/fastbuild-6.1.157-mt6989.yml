@@ -551,6 +551,9 @@ jobs:
           echo "sloppiness = file_stat_matches,include_file_ctime,include_file_mtime,pch_defines,file_macro,time_macros" >> "$CCACHE_DIR/ccache.conf"
 
           cd kernel_workspace/common
+          # Clang 20 对 tools/lib/bpf 的老代码更严格,Makefile 里 override 的 -Werror 会直接打死 resolve_btfids
+          sed -i 's/^override CFLAGS += -Werror -Wall$/override CFLAGS += -Wall/' tools/lib/bpf/Makefile
+          grep -q '^override CFLAGS += -Wall$' tools/lib/bpf/Makefile && echo "[fix] tools/lib/bpf 已去掉 -Werror"
           wget -q https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/main/lib/libfakestat.so || true
           wget -q https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/main/lib/libfaketimeMT.so || true
           chmod 777 ./*.so 2>/dev/null || true

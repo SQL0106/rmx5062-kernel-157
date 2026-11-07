@@ -164,15 +164,16 @@ jobs:
       - name: 配置 ccache 目录
         run: |
           echo "CCACHE_DIR=$HOME/.ccache_${KERNEL_VERSION}.${SUB_VERSION}_mt6989" >> "$GITHUB_ENV"
-          echo "CCACHE_MAXSIZE=3G" >> "$GITHUB_ENV"
+          echo "CCACHE_MAXSIZE=4G" >> "$GITHUB_ENV"
           echo "CCACHE_REAL_KEY=${CCACHE_KEY}" >> "$GITHUB_ENV"
 
       - name: 载入 ccache 缓存
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         id: ccache-restore
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ${{ env.CCACHE_REAL_KEY }}-${{ runner.os }}-${{ github.ref_name }}
+          # 每次 run 一个新 key，靠 restore-keys 前缀取最近一份
+          key: ${{ env.CCACHE_REAL_KEY }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             ${{ env.CCACHE_REAL_KEY }}-${{ runner.os }}-
             ${{ env.CCACHE_REAL_KEY }}-
@@ -185,7 +186,7 @@ jobs:
           export CCACHE_NOHARDLINK="true"
           export CCACHE_DIR="${{ env.CCACHE_DIR }}"
           mkdir -p "$CCACHE_DIR"
-          ccache -M 3G
+          ccache -M 4G
           ccache -o compression=true
           ccache -s
 
@@ -632,11 +633,12 @@ jobs:
           echo "校验通过"
 
       - name: 保存 ccache
-        if: inputs.ccache_update || steps.ccache-restore.outputs.cache-hit != 'true'
+        # 关键：编译失败也要存，否则每次从零开始（actions/cache 默认只在成功时保存）
+        if: always() && !cancelled()
         uses: actions/cache/save@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ${{ env.CCACHE_REAL_KEY }}-${{ runner.os }}-${{ github.ref_name }}
+          key: ${{ env.CCACHE_REAL_KEY }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: 打入 KPM (KPatch-Next)
         if: inputs.kpm_enable

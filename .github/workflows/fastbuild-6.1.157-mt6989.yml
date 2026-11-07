@@ -193,6 +193,37 @@ jobs:
           ccache -o compression=true
           ccache -s
 
+      - name: 修复官方树里的悬空软链 (vendor/oplus 未随源码发布)
+        run: |
+          set -o pipefail
+          cd kernel_workspace
+          # OnePlusOSS 树里有很多软链指向 ../../../vendor/oplus/... ，而 vendor 树没发布,
+          # 解包后全是悬空链接。典型受害者:
+          #   kernel/locking/locking_main.h -> vendor/oplus/kernel/synchronize/oplus_locking.h
+          #   kernel/locking/oplus_locking.c (obj-y, 必须能编)
+          # 6.1.134 的 cctv18 树里这些是真实文件, 直接同名补回去。
+          find common -xtype l | sort > /tmp/broken.txt || true
+          echo "悬空软链 $(wc -l < /tmp/broken.txt) 个"
+          while read -r link; do
+            [ -n "$link" ] || continue
+            rel="${link#common/}"
+            if [ -e "ref134/$rel" ]; then
+              rm -f "$link"
+              cp -a "ref134/$rel" "$link"
+              echo "[fixed] $rel  <- ref134"
+            else
+              echo "[dangling] $rel -> $(readlink "$link")"
+            fi
+          done < /tmp/broken.txt
+
+          echo "--- 编译必需文件自检 ---"
+          for f in kernel/locking/locking_main.h kernel/locking/sa_common_struct.h kernel/locking/oplus_locking.c; do
+            [ -s "common/$f" ] || { echo "::error::common/$f 缺失或为空, 无法编译"; exit 1; }
+          done
+          grep -q "^obj-y += .*oplus_locking.o" common/kernel/locking/Makefile && echo "oplus_locking.o 参与编译, 已补齐源码"
+          echo "--- 仍然悬空的软链(仅供排查) ---"
+          find common -xtype l 2>/dev/null | sed 's/^/  /' | head -40 || true
+
       - name: 清理悬空 Kconfig/Makefile 引用 (官方树缺 drivers/soc/oplus)
         run: |
           set -e

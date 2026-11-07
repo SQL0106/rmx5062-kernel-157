@@ -340,9 +340,41 @@ jobs:
           cp ./susfs4ksu/kernel_patches/fs/* ./common/fs/
           cp ./susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
           cd ./common
-          patch -p1 -F 3 < 50_add_susfs_in_gki-android14-6.1.patch || { echo "::warning::SUSFS 主补丁未完全应用"; true; }
-          patch -p1 -N -F 3 < 69_hide_stuff.patch || { echo "::warning::69_hide_stuff 未应用(版本差异)"; true; }
-          grep -q susfs fs/Makefile || echo "::warning::fs/Makefile 未见 susfs"
+          # BakaSU/SukiSU 自带 selinux hide(backup_sepolicy + hook/patch_memory), 源码里没有
+          # fake_state/fake_status/susfs_ksu_sid —— 这些只存在于原版 KSU 的 10_enable 补丁里。
+          # 直接打 50_ 主补丁会在链接期报 undefined symbol: fake_state (run 42390810756)。
+          KSU_TYPE="${{ inputs.ksu_type }}"
+          PATCH_FILE=50_add_susfs_in_gki-android14-6.1.patch
+          if [ "$KSU_TYPE" != "ksu" ]; then
+            python3 "$GITHUB_WORKSPACE/scripts/filter_susfs_patch.py" \
+              "$PATCH_FILE" 50_filtered.patch security/selinux/
+            PATCH_FILE=50_filtered.patch
+          fi
+          patch -p1 -F 3 --batch -r - < "$PATCH_FILE" || { echo "::warning::SUSFS 主补丁未完全应用"; true; }
+          patch -p1 -N -F 3 --batch -r - < 69_hide_stuff.patch || { echo "::warning::69_hide_stuff 未应用(版本差异)"; true; }
+
+          # 157 树在 cpufreq_times.h 之后多了 dma-buf.h, fs/proc/base.c 的 include hunk 匹配不上;
+          # 缺了 susfs_def.h 会导致 SUS_MAP/OPEN_REDIRECT 的宏未定义。
+          python3 - <<'PY'
+          p = "fs/proc/base.c"
+          s = open(p, encoding="utf-8").read()
+          if "susfs_def.h" not in s:
+              anchor = "#include <linux/dma-buf.h>"
+              if anchor not in s:
+                  raise SystemExit("::error::fs/proc/base.c 找不到插入锚点")
+              s = s.replace(anchor, anchor + "\n#if defined(CONFIG_KSU_SUSFS_SUS_MAP) || defined(CONFIG_KSU_SUSFS_OPEN_REDIRECT)\n#include <linux/susfs_def.h>\n#endif", 1)
+              open(p, "w", encoding="utf-8").write(s)
+              print("[fix] fs/proc/base.c 已补 susfs_def.h include")
+          PY
+
+          # 硬校验: 打补丁不再"尽力而为"
+          test -f fs/susfs.c || { echo "::error::fs/susfs.c 不存在, SUSFS 未集成"; exit 1; }
+          grep -q susfs fs/Makefile || { echo "::error::fs/Makefile 未见 susfs"; exit 1; }
+          grep -q "SUSFS_IS_INODE_OPEN_REDIRECT\|susfs_def.h" fs/proc/base.c || { echo "::error::fs/proc/base.c 未接入 susfs"; exit 1; }
+          if [ "$KSU_TYPE" != "ksu" ] && grep -rqs "fake_state\|fake_status" security/selinux/; then
+            echo "::error::security/selinux 仍引用 fake_state/fake_status, 过滤失败"; exit 1
+          fi
+          echo "[ok] SUSFS 已集成 (patch=$PATCH_FILE, ksu_type=$KSU_TYPE)"
 
       - name: 原版 KSU 额外打 SUSFS 开关补丁
         if: inputs.susfs_enable && inputs.ksu_type == 'ksu'

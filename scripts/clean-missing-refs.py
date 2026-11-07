@@ -21,6 +21,10 @@ OBJ_DIR_RE = re.compile(r'^\s*obj-[ym]?\s*\+?=\s*([A-Za-z0-9_./+-]+/)\s*$')
 
 for dirpath, dirnames, filenames in os.walk(root):
     dirnames[:] = [d for d in dirnames if d not in (".git", "out")]
+    # kconfig 自带的测试用例里有故意写坏的 Kconfig, 不能动
+    if dirpath.replace("\\", "/").endswith("scripts/kconfig/tests"):
+        dirnames[:] = []
+        continue
     for fn in filenames:
         if not (fn == "Kconfig" or fn.startswith("Kconfig.") or fn.startswith("Makefile")):
             continue
@@ -35,7 +39,14 @@ for dirpath, dirnames, filenames in os.walk(root):
         for line in lines:
             m = SOURCE_RE.match(line)
             if m:
-                target = os.path.join(root, m.group(1))
+                raw = m.group(1)
+                # 含 $(SRCARCH)/$(HEADER_ARCH)/$(KCONFIG_EXT_PREFIX) 等变量的路径无法静态判断,
+                # 一律保留 —— 曾因删掉 arch/Kconfig 里的 source "arch/$(SRCARCH)/Kconfig"
+                # 导致 CONFIG_ARM64/CONFIG_64BIT 全丢, 编译 kernel/bounds.c 时 atomic64_t 未定义。
+                if "$" in raw:
+                    new_lines.append(line)
+                    continue
+                target = os.path.join(root, raw)
                 if not os.path.exists(target):
                     removed.append((path, line.strip()))
                     continue

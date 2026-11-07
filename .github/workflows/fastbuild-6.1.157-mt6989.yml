@@ -544,12 +544,13 @@ jobs:
       - name: 编译内核
         run: |
           set -e
+          set -o pipefail
           WORKDIR="$(pwd)"
           export PATH="$WORKDIR/kernel_workspace/clang20/bin:$PATH"
           export PATH="/usr/lib/ccache:$PATH"
           echo "Clang: $(clang --version | head -n1)"
           echo "LLD:   $(ld.lld --version | head -n1)"
-          echo "Host:  $(uname -m)"
+          echo "CPU:   $(nproc --all) cores, host=$(uname -m)"
 
           export CCACHE_LOGFILE="$WORKDIR/kernel_workspace/ccache.log"
           export CCACHE_COMPILERCHECK="none"
@@ -567,16 +568,59 @@ jobs:
 
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL &
 
-          make -j"$(nproc --all)" LLVM=1 ARCH=arm64 \
+          LOG="$WORKDIR/build.log"
+          : > "$LOG"
+
+          echo "=== 1/2 gki_defconfig ==="
+          timeout -k 30 600 make -j"$(nproc --all)" LLVM=1 ARCH=arm64 \
             CC="ccache clang" LD=ld.lld HOSTLD=ld.lld O=out \
-            KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig
-          make -j"$(nproc --all)" LLVM=1 ARCH=arm64 \
+            KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig 2>&1 | tee -a "$LOG"
+
+          # 配置健全性: 少了 CONFIG_ARM64/64BIT 就说明 Kconfig 树被改坏了, 别浪费一小时去编译
+          echo "--- .config 自检 ---"
+          echo "CONFIG_ 行数: $(grep -c '^CONFIG_' out/.config)"
+          grep -E '^CONFIG_(ARM64|64BIT|PID_NS|SYSVIPC|DEVTMPFS|NTSYNC)=' out/.config || true
+          for c in ARM64 64BIT; do
+            grep -q "^CONFIG_${c}=y$" out/.config || { echo "::error::out/.config 缺 CONFIG_${c}=y, Kconfig 树不完整"; exit 1; }
+          done
+          [ "$(grep -c '^CONFIG_' out/.config)" -gt 1000 ] || { echo "::error::配置项太少, defconfig 没被完整解析"; exit 1; }
+
+          echo "=== 2/2 Image ==="
+          # 心跳: 每 60s 打一行对象数, 这样失败/卡住时能立刻看出编到哪
+          ( while true; do
+              sleep 60
+              echo "[hb] $(date -u +%H:%M:%SZ) objs=$(find out -name '*.o' 2>/dev/null | wc -l) log=$(wc -l < "$LOG")"
+            done ) &
+          HB=$!
+          trap 'kill $HB 2>/dev/null || true' EXIT
+
+          set +e
+          timeout -k 30 7200 make -j"$(nproc --all)" LLVM=1 ARCH=arm64 \
             CC="ccache clang" LD=ld.lld HOSTLD=ld.lld O=out \
-            KCFLAGS+=-O2 KCFLAGS+=-Wno-error Image
+            KCFLAGS+=-O2 KCFLAGS+=-Wno-error Image 2>&1 | tee -a "$LOG"
+          RC=${PIPESTATUS[0]}
+          set -e
+
+          kill $HB 2>/dev/null || true
+          trap - EXIT
+          echo "make Image 退出码: $RC"
+          if [ "$RC" -ne 0 ]; then
+            echo "::error::Image 构建失败 (rc=$RC), 以下为错误摘要"
+            grep -n -m 40 "error:\|Error [0-9]\|undefined reference" "$LOG" || true
+            exit "$RC"
+          fi
 
           echo "编译完成"
           ccache -s
           df -h
+
+      - name: 上传构建日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-arm64
+          path: build.log
+          if-no-files-found: warn
 
       - name: 校验
         run: |

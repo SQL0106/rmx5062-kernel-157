@@ -110,6 +110,9 @@ jobs:
       actions: write
       contents: read
     steps:
+      - name: 检出本仓库 (patches/ 需要)
+        uses: actions/checkout@v4
+
       - name: 环境初始化 + 源码/工具链下载
         run: |
           set -e
@@ -342,6 +345,7 @@ jobs:
           set -e
           cd kernel_workspace/common
           P="${{ github.workspace }}/patches"
+          test -f "$P/01-fix_sysvipc_kabi_6_7_8.patch" || { echo "::error::patches/ 不存在,仓库未检出"; exit 1; }
           apply() {
             echo "--- $1"
             patch -p1 --dry-run -F 3 < "$P/$1"

@@ -18,7 +18,7 @@ on:
         description: 'Root 方案'
         required: true
         type: choice
-        default: 'ksunext'
+        default: 'bakasu'
         options:
           - 'ksunext'   # KernelSU Next (dev-susfs) + 内置 GKI 模式
           - 'bakasu'    # BakaSU (= 原 ReSukiSU,已改名;cctv18 默认,兼容 SukiSU 管理器)
@@ -188,6 +188,13 @@ jobs:
           ccache -M 3G
           ccache -o compression=true
           ccache -s
+
+      - name: 清理悬空 Kconfig/Makefile 引用 (官方树缺 drivers/soc/oplus)
+        run: |
+          set -e
+          cd kernel_workspace/common
+          python3 "${{ github.workspace }}/scripts/clean-missing-refs.py" .
+          test -f drivers/soc/oplus/oplus_resctrl/Kconfig || echo "已移除 oplus_resctrl/storage 的 source/obj 引用"
 
       - name: 移植 SSG IO 调度器 (134 -> 157)
         if: inputs.ssg_enable

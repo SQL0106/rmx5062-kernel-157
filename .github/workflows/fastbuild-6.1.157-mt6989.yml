@@ -9,7 +9,7 @@ env:
   SOURCE_COMMIT: '822beed40827f1e9a103bc06ab4714a670080b72'
   REF134_COMMIT: '16bc556523df15b47f47ec4185616f0304c44240'
   REF134_REPO: 'cctv18/android_kernel_oneplus_mt6989'
-  CCACHE_KEY: ccache-rmx5062-6.1.157-mt6989
+  CCACHE_KEY: ccache-rmx5062-6.1.157-mt6989-arm64
 
 on:
   workflow_dispatch:
@@ -105,7 +105,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 300
     outputs:
       ak3name: ${{ steps.create_zip.outputs.ak3name }}
@@ -130,14 +130,11 @@ jobs:
           sudo rm -rf /var/lib/man-db/auto-update 2>/dev/null || true
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            aria2 binutils bison flex dwarves python-is-python3 \
+            aria2 binutils bison flex dwarves python-is-python3 ccache \
             libssl-dev libelf-dev zip unzip cpio bc xz-utils >/dev/null
 
-          # cctv18 特化 ccache
-          wget -q https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/main/lib/ccache-x86-64 -O ccache
-          sudo cp -f ./ccache /usr/bin/ccache
-          sudo chmod +x /usr/bin/ccache
-          rm -f ./ccache
+          # 原生 arm64 runner:用发行版 ccache,不用 cctv18 的 x86_64 二进制
+          ccache --version | head -1
 
           # 6.1.157 官方树(MTK 最高只有 134 的 cctv18 树,157 只存在于 OnePlusOSS)
           aria2c -s16 -x16 -k1M -q \
@@ -146,18 +143,19 @@ jobs:
           aria2c -s16 -x16 -k1M -q \
             "https://github.com/${REF134_REPO}/archive/${REF134_COMMIT}.tar.gz" -o ref134.tar.gz &
           aria2c -s16 -x16 -k1M -q \
-            "https://github.com/cctv18/oneplus_sm8650_toolchain/releases/download/LLVM-Clang20-r547379/clang-r547379.zip" -o clang.zip &
-          aria2c -s16 -x16 -k1M -q \
-            "https://github.com/cctv18/oneplus_sm8650_toolchain/releases/download/LLVM-Clang20-r547379/build-tools.zip" -o build-tools.zip &
+            "https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/LLVM-20.1.8-Linux-ARM64.tar.xz" -o llvm.tar.xz &
           wait
 
           mkdir -p clang20 ref134
           tar -xf common.tar.gz
           mv "android_kernel_oneplus_mt6989-${SOURCE_COMMIT}" common
           tar -xf ref134.tar.gz -C ref134 --strip-components=1
-          unzip -q clang.zip -d clang20
-          unzip -q build-tools.zip
-          rm -f common.tar.gz ref134.tar.gz clang.zip build-tools.zip
+          tar -xf llvm.tar.xz
+          LLVM_DIR=$(find . -maxdepth 1 -type d \( -name 'LLVM-*' -o -name 'clang+llvm-*' \) | head -1)
+          [[ -n "$LLVM_DIR" ]] || { echo "!! 解压后没找到 LLVM 目录"; ls -la; exit 1; }
+          echo "LLVM: $LLVM_DIR"
+          mv "$LLVM_DIR"/* clang20/
+          rm -f common.tar.gz ref134.tar.gz llvm.tar.xz
           echo "源码: $(grep -m1 '^SUBLEVEL' common/Makefile)  参考树: $(grep -m1 '^SUBLEVEL' ref134/Makefile)"
 
           rm -f common/android/abi_gki_protected_exports_*
@@ -547,11 +545,11 @@ jobs:
         run: |
           set -e
           WORKDIR="$(pwd)"
-          export PATH="/usr/lib/ccache:$PATH"
           export PATH="$WORKDIR/kernel_workspace/clang20/bin:$PATH"
-          export PATH="$WORKDIR/kernel_workspace/build-tools/bin:$PATH"
+          export PATH="/usr/lib/ccache:$PATH"
           echo "Clang: $(clang --version | head -n1)"
           echo "LLD:   $(ld.lld --version | head -n1)"
+          echo "Host:  $(uname -m)"
 
           export CCACHE_LOGFILE="$WORKDIR/kernel_workspace/ccache.log"
           export CCACHE_COMPILERCHECK="none"
@@ -566,26 +564,14 @@ jobs:
           # Clang 20 对 tools/lib/bpf 的老代码更严格,Makefile 里 override 的 -Werror 会直接打死 resolve_btfids
           sed -i 's/^override CFLAGS += -Werror -Wall$/override CFLAGS += -Wall/' tools/lib/bpf/Makefile
           grep -q '^override CFLAGS += -Wall$' tools/lib/bpf/Makefile && echo "[fix] tools/lib/bpf 已去掉 -Werror"
-          wget -q https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/main/lib/libfakestat.so || true
-          wget -q https://github.com/cctv18/oppo_oplus_realme_sm8650/raw/main/lib/libfaketimeMT.so || true
-          chmod 777 ./*.so 2>/dev/null || true
-          SO_DIR=$(pwd)
-          export PRELOAD_LIBS="$SO_DIR/libfakestat.so $SO_DIR/libfaketimeMT.so"
-          export FAKESTAT="2025-05-25 12:00:00"
-          export FAKETIME="@2025-05-25 13:00:00"
-          { echo '#!/bin/bash'; echo "export LD_PRELOAD=\"$PRELOAD_LIBS\""; \
-            echo "export FAKESTAT=\"$FAKESTAT\""; echo "export FAKETIME=\"$FAKETIME\""; echo 'ccache clang "$@"'; } > cc-wrapper
-          { echo '#!/bin/bash'; echo "export LD_PRELOAD=\"$PRELOAD_LIBS\""; \
-            echo "export FAKESTAT=\"$FAKESTAT\""; echo "export FAKETIME=\"$FAKETIME\""; echo 'ld.lld "$@"'; } > ld-wrapper
-          chmod +x cc-wrapper ld-wrapper
 
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL &
 
-          make -j"$(nproc --all)" LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-            CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out \
+          make -j"$(nproc --all)" LLVM=1 ARCH=arm64 \
+            CC="ccache clang" LD=ld.lld HOSTLD=ld.lld O=out \
             KCFLAGS+=-O2 KCFLAGS+=-Wno-error gki_defconfig
-          make -j"$(nproc --all)" LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
-            CC="$(pwd)/cc-wrapper" LD="$(pwd)/ld-wrapper" HOSTLD=ld.lld O=out \
+          make -j"$(nproc --all)" LLVM=1 ARCH=arm64 \
+            CC="ccache clang" LD=ld.lld HOSTLD=ld.lld O=out \
             KCFLAGS+=-O2 KCFLAGS+=-Wno-error Image
 
           echo "编译完成"
@@ -656,9 +642,19 @@ jobs:
         run: |
           set -e
           cd kernel_workspace/common/out/arch/arm64/boot
-          wget -q https://github.com/KernelSU-Next/KPatch-Next/releases/latest/download/kptools-linux
           wget -q https://github.com/KernelSU-Next/KPatch-Next/releases/latest/download/kpimg-linux
-          chmod +x kptools-linux kpimg-linux
+          chmod +x kpimg-linux
+          if [ "$(uname -m)" = "x86_64" ]; then
+            wget -q https://github.com/KernelSU-Next/KPatch-Next/releases/latest/download/kptools-linux
+            chmod +x kptools-linux
+          else
+            echo "arm64 host: 从源码构建 kptools"
+            sudo apt-get install -y --no-install-recommends zlib1g-dev >/dev/null
+            rm -rf /tmp/kpn && git clone -q --depth=1 https://github.com/KernelSU-Next/KPatch-Next /tmp/kpn
+            make -C /tmp/kpn/tools CC=clang -j"$(nproc)" kptools
+            cp /tmp/kpn/tools/kptools ./kptools-linux
+            chmod +x ./kptools-linux
+          fi
           ./kptools-linux -p -i ./Image -k ./kpimg-linux -o ./Image.kpm
           mv -f ./Image.kpm ./Image
           ls -l Image

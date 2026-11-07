@@ -236,7 +236,8 @@ jobs:
         run: |
           set -e
           cd kernel_workspace
-          for f in ssg-iosched.c ssg-stat.c ssg-cgroup.c ssg.h; do
+          # blk-sec.h 是 cctv18 134 树里 SSG 依赖的私有头(CONFIG_BLK_SEC_* 关闭时全是空 inline)
+          for f in ssg-iosched.c ssg-stat.c ssg-cgroup.c ssg.h blk-sec.h; do
             [ -f "ref134/block/$f" ] || { echo "::error::ref134 缺 block/$f"; exit 1; }
             cp "ref134/block/$f" common/block/
           done

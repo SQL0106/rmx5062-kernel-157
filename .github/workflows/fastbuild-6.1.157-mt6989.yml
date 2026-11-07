@@ -740,6 +740,14 @@ jobs:
           fi
           echo "校验通过"
 
+      - name: 先上传裸 Image（KPM/打包失败也能拿到）
+        if: always() && !cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Image-raw
+          path: kernel_workspace/common/out/arch/arm64/boot/Image
+          if-no-files-found: warn
+
       - name: 保存 ccache
         # 关键：编译失败也要存，否则每次从零开始（actions/cache 默认只在成功时保存）
         if: always() && !cancelled()
@@ -762,13 +770,19 @@ jobs:
             echo "arm64 host: 从源码构建 kptools"
             sudo apt-get install -y --no-install-recommends zlib1g-dev >/dev/null
             rm -rf /tmp/kpn && git clone -q --depth=1 https://github.com/KernelSU-Next/KPatch-Next /tmp/kpn
+            # kptools 必须先用 kernel 的 hdr 目标把 preset.h 复制到 tools/, 否则
+            # kptools.c:20 fatal error: 'preset.h' file not found
+            TARGET_COMPILE=placeholder make -C /tmp/kpn/kernel hdr >/dev/null
+            test -f /tmp/kpn/tools/preset.h || { echo "::error::preset.h 未生成"; exit 1; }
             make -C /tmp/kpn/tools CC=clang -j"$(nproc)" kptools
             cp /tmp/kpn/tools/kptools ./kptools-linux
             chmod +x ./kptools-linux
           fi
+          ./kptools-linux --version || { echo "::error::kptools 无法运行"; exit 1; }
           ./kptools-linux -p -i ./Image -k ./kpimg-linux -o ./Image.kpm
+          test -s ./Image.kpm || { echo "::error::Image.kpm 未生成"; exit 1; }
           mv -f ./Image.kpm ./Image
-          ls -l Image
+          ls -l Image kpimg-linux
 
       - name: 打包 AnyKernel3
         id: create_zip

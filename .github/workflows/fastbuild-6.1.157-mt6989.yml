@@ -92,6 +92,11 @@ on:
         required: true
         type: boolean
         default: false
+      fast_build:
+        description: '快速验证构建 (关 DEBUG_INFO/BTF,省 20-30% 时间,产物无 BTF)'
+        required: true
+        type: boolean
+        default: false
       make_release:
         description: '构建成功后发布 Release'
         required: true
@@ -384,6 +389,12 @@ jobs:
           KSU_TYPE="${{ inputs.ksu_type }}"
           DSP="${{ inputs.droidspaces }}"
           NET="${{ inputs.better_net }}"
+
+          # ---- 快速验证构建 ----
+          if [ "${{ inputs.fast_build }}" = "true" ]; then
+            echo "CONFIG_DEBUG_INFO_NONE=y" >> "$DEFCONFIG_FILE"
+            echo "# CONFIG_DEBUG_INFO_BTF is not set" >> "$DEFCONFIG_FILE"
+          fi
 
           # ---- 通用 ----
           cat >> "$DEFCONFIG_FILE" << 'EOF'

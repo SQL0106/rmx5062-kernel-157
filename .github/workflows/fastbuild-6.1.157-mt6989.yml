@@ -690,6 +690,8 @@ jobs:
         run: |
           set -e
           cd kernel_workspace/common
+          [ -f out/arch/arm64/boot/Image ] || { echo "::error::out/arch/arm64/boot/Image 不存在"; exit 1; }
+          ls -lh out/arch/arm64/boot/Image
           UTS=$(sed -n 's/.*UTS_RELEASE "\(.*\)"/\1/p' out/include/generated/utsrelease.h)
           echo "UTS_RELEASE = $UTS"
           [ "$UTS" = "6.1.157-$SUFFIX" ] || { echo "::error::版本号不匹配,期望 6.1.157-$SUFFIX"; exit 1; }
@@ -710,8 +712,9 @@ jobs:
             done
           fi
           if [ "${{ inputs.better_net }}" = "true" ]; then
-            for o in net/netfilter/ipset/ip_set.o net/netfilter/xt_set.o; do
-              [ -f "out/$o" ] || { echo "::error::缺少 out/$o"; exit 1; }
+            # 这里只编 Image，模块(.ko)不会生成，所以只能校验配置值，不能校验 .o
+            for c in IP_SET NETFILTER_XT_SET; do
+              grep -qE "^CONFIG_${c}=(y|m)$" "$CFG" || { echo "::error::CONFIG_${c} 未启用"; exit 1; }
             done
           fi
 

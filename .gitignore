@@ -1,0 +1,4 @@
+kernel_workspace/
+*.zip
+*.tar.gz
+out/

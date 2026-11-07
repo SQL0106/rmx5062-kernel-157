@@ -28,7 +28,7 @@ on:
         description: '启用 KPM (KPatch-Next,刷完可用 KPM 模块)'
         required: true
         type: boolean
-        default: false
+        default: true
       susfs_enable:
         description: '启用 SUSFS (需要 ksu_type != none)'
         required: true
